@@ -36,9 +36,10 @@ detections that work
 <a name="features"></a>
 ## Features
 
-- ✅ Todo
-- ✅ Fixme
-- ✅ Xxx
+- ✅ Parse Yaml
+- ✅ Evaluate Detection
+- ✅ Lint Rule
+- ✅ Run Unit Tests
 - ✅ Runs on Linux/macOS/Windows · Docker · devcontainer
 - ✅ Ports in Python, JavaScript, Go, and Rust (`ports/`)
 
