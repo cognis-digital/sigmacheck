@@ -1,0 +1,10 @@
+{
+  "name": "@cognis/sigmacheck",
+  "version": "0.2.0",
+  "description": "JavaScript port of sigmacheck (Cognis Neural Suite)",
+  "bin": {
+    "sigmacheck": "index.js"
+  },
+  "license": "LicenseRef-COCL-1.0",
+  "type": "module"
+}
