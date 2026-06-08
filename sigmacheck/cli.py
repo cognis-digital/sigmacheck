@@ -1,166 +1,225 @@
-"""Command-line interface for SIGMACHECK.
+"""Command-line interface for SIGMACHECK."""
 
-Subcommands:
-  lint   RULE.yml                 Lint one or more Sigma rules.
-  test   RULE.yml --cases C.json  Run unit-test cases against a rule.
-  match  RULE.yml --event E.json  Evaluate a single event against a rule.
-
-Global: --version, --format {table,json}
-Exit codes: 0 = clean, 1 = findings/test failures, 2 = usage/parse error.
-"""
 from __future__ import annotations
 
 import argparse
+import glob
 import json
+import os
 import sys
-from typing import Any, Dict, List, Optional
+from typing import List, Optional
 
 from . import TOOL_NAME, TOOL_VERSION
 from .core import (
-    lint_rule,
-    run_unit_tests,
-    evaluate_detection,
-    parse_yaml,
-    YamlError,
+    SEVERITY_ORDER,
+    CheckResult,
+    RuleResult,
+    check_text,
+    check_bundled,
+    load_bundled_rules,
+    match_event,
 )
 
 
-def _load_rule(path: str) -> Dict[str, Any]:
+def _read(path: str) -> str:
+    if path == "-":
+        return sys.stdin.read()
     with open(path, "r", encoding="utf-8") as fh:
-        return parse_yaml(fh.read())
+        return fh.read()
 
 
-def _load_json(path: str) -> Any:
-    with open(path, "r", encoding="utf-8") as fh:
-        return json.load(fh)
+def _gather(paths: List[str]) -> str:
+    """Concatenate rule files (multi-doc) into a single ``---``-joined text."""
+    docs: List[str] = []
+    expanded: List[str] = []
+    for p in paths:
+        if p == "-":
+            expanded.append(p)
+        elif os.path.isdir(p):
+            for ext in ("*.yml", "*.yaml"):
+                expanded.extend(sorted(glob.glob(os.path.join(p, "**", ext),
+                                                  recursive=True)))
+        elif any(ch in p for ch in "*?[]"):
+            expanded.extend(sorted(glob.glob(p, recursive=True)))
+        else:
+            expanded.append(p)
+    for p in expanded:
+        docs.append(_read(p))
+    return "\n---\n".join(docs)
 
 
-def _emit(obj: Any, fmt: str, table_fn) -> None:
-    if fmt == "json":
-        print(json.dumps(obj, indent=2))
-    else:
-        table_fn(obj)
+def _icon(ok: bool) -> str:
+    return "PASS" if ok else "FAIL"
 
 
-def _lint_table(report: Dict[str, Any]) -> None:
-    print(f"errors={report['errors']} warnings={report['warnings']}")
-    for f in report["findings"]:
-        print(f"  [{f['level'].upper():7}] {f['code']}: {f['message']}")
-    if not report["findings"]:
-        print("  (clean)")
+def _render_check_table(result: CheckResult) -> str:
+    lines: List[str] = []
+    lines.append(f"SIGMACHECK {TOOL_VERSION} — Sigma rule validator + test runner")
+    lines.append(f"rules={result.total_rules}  "
+                 f"invalid={result.invalid_rules}  "
+                 f"findings={result.total_findings}  "
+                 f"tests={result.total_tests}  "
+                 f"tests_failed={result.tests_failed}")
+    lines.append("-" * 76)
+    for r in result.rules:
+        head = f"[{_icon(r.ok)}] {r.title}"
+        if r.rule_id:
+            head += f"  ({r.rule_id})"
+        lines.append(head)
+        if r.error:
+            lines.append(f"      ERROR: {r.error}")
+        for f in sorted(r.findings,
+                        key=lambda x: -SEVERITY_ORDER.get(x.severity, 0)):
+            lines.append(f"      - {f.severity:<8} [{f.check}] {f.message}")
+        for t in r.tests:
+            mark = "ok" if t.passed else "XX"
+            lines.append(f"        {mark} test {t.name}: "
+                         f"expected={t.expected} actual={t.actual}")
+        if r.tests:
+            lines.append(f"      tests: {r.tests_passed} passed, "
+                         f"{r.tests_failed} failed")
+    lines.append("-" * 76)
+    lines.append("RESULT: " + ("ALL PASS" if result.ok else "FAILURES PRESENT"))
+    return "\n".join(lines)
 
 
-def _test_table(payload: Dict[str, Any]) -> None:
-    print(f"passed={payload['passed']}/{payload['total']}")
-    for r in payload["results"]:
-        status = "PASS" if r["passed"] else "FAIL"
-        detail = f"expected={r['expected']} actual={r['actual']}"
-        if r["error"]:
-            detail = f"error={r['error']}"
-        print(f"  [{status}] {r['name']}: {detail}")
-
-
-def cmd_lint(args: argparse.Namespace) -> int:
-    total_errors = 0
-    reports: List[Dict[str, Any]] = []
-    for path in args.rules:
-        try:
-            rule = _load_rule(path)
-        except (OSError, YamlError) as exc:
-            print(f"error: cannot parse {path}: {exc}", file=sys.stderr)
-            return 2
-        rep = lint_rule(rule).to_dict()
-        rep["rule"] = path
-        total_errors += rep["errors"]
-        reports.append(rep)
-
-    if args.format == "json":
-        print(json.dumps({"tool": TOOL_NAME, "reports": reports}, indent=2))
-    else:
-        for rep in reports:
-            print(f"== {rep['rule']} ==")
-            _lint_table(rep)
-    return 1 if total_errors else 0
-
-
-def cmd_test(args: argparse.Namespace) -> int:
-    try:
-        rule = _load_rule(args.rule)
-        cases = _load_json(args.cases)
-    except (OSError, YamlError, json.JSONDecodeError) as exc:
-        print(f"error: {exc}", file=sys.stderr)
-        return 2
-    if isinstance(cases, dict) and "tests" in cases:
-        cases = cases["tests"]
-    if not isinstance(cases, list):
-        print("error: cases file must be a JSON list (or {\"tests\": [...]})", file=sys.stderr)
-        return 2
-    results = run_unit_tests(rule, cases)
-    passed = sum(1 for r in results if r.passed)
-    payload = {
-        "tool": TOOL_NAME,
-        "rule": args.rule,
-        "total": len(results),
-        "passed": passed,
-        "results": [r.to_dict() for r in results],
-    }
-    _emit(payload, args.format, _test_table)
-    return 0 if passed == len(results) and results else (0 if not results else 1)
-
-
-def cmd_match(args: argparse.Namespace) -> int:
-    try:
-        rule = _load_rule(args.rule)
-        event = _load_json(args.event)
-    except (OSError, YamlError, json.JSONDecodeError) as exc:
-        print(f"error: {exc}", file=sys.stderr)
-        return 2
-    if not isinstance(event, dict):
-        print("error: event file must be a JSON object", file=sys.stderr)
-        return 2
-    try:
-        matched = evaluate_detection(rule, event)
-    except YamlError as exc:
-        print(f"error: {exc}", file=sys.stderr)
-        return 2
-    payload = {"tool": TOOL_NAME, "rule": args.rule, "matched": matched}
-    _emit(payload, args.format, lambda p: print(f"matched={p['matched']}"))
-    # A non-match is a normal/clean result; only return 1 to flag a detection hit
-    return 1 if matched else 0
+def _render_match_table(rule_title: str, matched: bool, event_idx: int) -> str:
+    return f"event[{event_idx}] vs '{rule_title}': " + (
+        "MATCH" if matched else "no match")
 
 
 def build_parser() -> argparse.ArgumentParser:
-    parser = argparse.ArgumentParser(
+    p = argparse.ArgumentParser(
         prog=TOOL_NAME,
-        description="Lint and unit-test Sigma detection rules against sample events.",
+        description="Sigma rule validator + unit-test runner (pySigma-spirit).",
     )
-    parser.add_argument("--version", action="version", version=f"{TOOL_NAME} {TOOL_VERSION}")
-    parser.add_argument(
-        "--format", choices=("table", "json"), default="table", help="output format"
-    )
-    sub = parser.add_subparsers(dest="command", required=True)
+    p.add_argument("--version", action="version",
+                   version=f"{TOOL_NAME} {TOOL_VERSION}")
+    p.add_argument("--format", choices=["table", "json"], default="table",
+                   help="output format (default: table)")
 
-    p_lint = sub.add_parser("lint", help="lint Sigma rule files")
-    p_lint.add_argument("rules", nargs="+", help="Sigma rule YAML file(s)")
-    p_lint.set_defaults(func=cmd_lint)
+    sub = p.add_subparsers(dest="command", required=True)
 
-    p_test = sub.add_parser("test", help="run unit-test cases against a rule")
-    p_test.add_argument("rule", help="Sigma rule YAML file")
-    p_test.add_argument("--cases", required=True, help="JSON file of test cases")
-    p_test.set_defaults(func=cmd_test)
+    c = sub.add_parser("check", help="validate + self-test rule file(s)/dir(s)")
+    c.add_argument("paths", nargs="*", default=["-"],
+                   help="rule files, directories, or globs ('-' = stdin)")
+    c.add_argument("--fail-on", default="high", choices=list(SEVERITY_ORDER),
+                   help="min finding-severity that fails the run (default: high)")
 
-    p_match = sub.add_parser("match", help="evaluate a single event against a rule")
-    p_match.add_argument("rule", help="Sigma rule YAML file")
-    p_match.add_argument("--event", required=True, help="JSON file with a single event object")
-    p_match.set_defaults(func=cmd_match)
+    sub.add_parser("demo", help="validate + self-test the bundled rule library")
 
-    return parser
+    ls = sub.add_parser("list", help="list bundled detection rules")
+
+    m = sub.add_parser("match", help="match a rule file against JSON event(s)")
+    m.add_argument("rule", help="path to a single Sigma rule file")
+    m.add_argument("events", help="path to a JSON array or JSONL of events "
+                                  "('-' = stdin)")
+
+    return p
 
 
-def main(argv: Optional[List[str]] = None) -> int:
+def _run_check(result: CheckResult, fmt: str, fail_on: str) -> int:
+    if fmt == "json":
+        print(json.dumps(result.to_dict(), indent=2))
+    else:
+        print(_render_check_table(result))
+    threshold = SEVERITY_ORDER[fail_on]
+    sev_fail = any(
+        SEVERITY_ORDER.get(f.severity, 0) >= threshold
+        for r in result.rules for f in r.findings)
+    failed = (not result.ok) or sev_fail or result.tests_failed > 0
+    return 1 if failed else 0
+
+
+def _load_events(text: str) -> List[dict]:
+    text = text.strip()
+    if not text:
+        return []
+    try:
+        obj = json.loads(text)
+        if isinstance(obj, list):
+            return [e for e in obj if isinstance(e, dict)]
+        if isinstance(obj, dict):
+            return [obj]
+    except json.JSONDecodeError:
+        pass
+    events = []
+    for line in text.splitlines():
+        line = line.strip()
+        if not line:
+            continue
+        events.append(json.loads(line))
+    return [e for e in events if isinstance(e, dict)]
+
+
+def main(argv: Optional[list] = None) -> int:
     parser = build_parser()
     args = parser.parse_args(argv)
-    return args.func(args)
+
+    if args.command == "check":
+        try:
+            text = _gather(args.paths or ["-"])
+        except OSError as exc:
+            print(f"sigmacheck: error: {exc}", file=sys.stderr)
+            return 2
+        result = check_text(text)
+        return _run_check(result, args.format, args.fail_on)
+
+    if args.command == "demo":
+        result = check_bundled()
+        return _run_check(result, args.format, "high")
+
+    if args.command == "list":
+        rules = load_bundled_rules()
+        if args.format == "json":
+            print(json.dumps([
+                {"title": r.get("title"), "id": r.get("id"),
+                 "level": r.get("level"), "status": r.get("status"),
+                 "logsource": r.get("logsource")}
+                for r in rules], indent=2))
+        else:
+            print(f"SIGMACHECK bundled rules ({len(rules)}):")
+            for r in rules:
+                ls = r.get("logsource") or {}
+                src = "/".join(str(ls.get(k)) for k in
+                               ("product", "category", "service") if ls.get(k))
+                print(f"  - [{r.get('level','?'):<8}] {r.get('title')}  ({src})")
+        return 0
+
+    if args.command == "match":
+        try:
+            rule_text = _read(args.rule)
+            events = _load_events(_read(args.events))
+        except (OSError, json.JSONDecodeError) as exc:
+            print(f"sigmacheck: error: {exc}", file=sys.stderr)
+            return 2
+        from .core import parse_yaml, _split_documents
+        docs = _split_documents(rule_text)
+        if not docs:
+            print("sigmacheck: error: no rule found", file=sys.stderr)
+            return 2
+        rule = parse_yaml(docs[0])
+        title = (rule or {}).get("title", "<rule>")
+        results = []
+        any_match = False
+        for i, ev in enumerate(events):
+            try:
+                matched = match_event(rule, ev)
+            except Exception as exc:
+                print(f"sigmacheck: error evaluating event {i}: {exc}",
+                      file=sys.stderr)
+                return 2
+            any_match = any_match or matched
+            results.append({"index": i, "match": matched})
+            if args.format == "table":
+                print(_render_match_table(title, matched, i))
+        if args.format == "json":
+            print(json.dumps({"rule": title, "results": results,
+                              "any_match": any_match}, indent=2))
+        return 1 if any_match else 0
+
+    parser.print_help()
+    return 2
 
 
 if __name__ == "__main__":

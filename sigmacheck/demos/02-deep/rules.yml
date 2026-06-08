@@ -1,0 +1,85 @@
+title: Suspicious Service Installation Via sc.exe
+id: 9d8c7b6a-5e4f-4321-8a09-bc0d1e2f3a4b
+status: experimental
+description: Detects creation of a Windows service pointing at a binary in a
+    user-writable or temp location using sc.exe, a common persistence and
+    lateral-movement technique. Exercises wildcard + endswith matching,
+    list-OR selections, and a multi-clause condition with negation.
+references:
+    - https://attack.mitre.org/techniques/T1543/003/
+tags:
+    - attack.persistence
+    - attack.privilege_escalation
+    - attack.t1543.003
+logsource:
+    category: process_creation
+    product: windows
+detection:
+    selection_tool:
+        Image|endswith: '\sc.exe'
+        CommandLine|contains|all:
+            - 'create'
+            - 'binPath'
+    selection_path:
+        CommandLine|contains:
+            - '\Temp\'
+            - '\AppData\'
+            - '\Users\Public\'
+            - 'C:\Windows\Temp\'
+    filter_known_good:
+        CommandLine|contains: 'binPath= C:\Windows\System32\'
+    condition: selection_tool and selection_path and not filter_known_good
+falsepositives:
+    - Some legitimate installers create services from temp paths
+level: high
+tests:
+    positive:
+        - Image: 'C:\Windows\System32\sc.exe'
+          CommandLine: 'sc.exe create EvilSvc binPath= C:\Users\Public\bk.exe start= auto'
+        - Image: 'C:\Windows\System32\sc.exe'
+          CommandLine: 'sc create Updater binPath= C:\Temp\drop.exe'
+    negative:
+        - Image: 'C:\Windows\System32\sc.exe'
+          CommandLine: 'sc.exe query EvilSvc'
+        - Image: 'C:\Windows\System32\sc.exe'
+          CommandLine: 'sc.exe create GoodSvc binPath= C:\Windows\System32\svc.exe'
+        - Image: 'C:\Windows\System32\net.exe'
+          CommandLine: 'net start spooler'
+---
+title: Kubernetes Privileged Pod Exec
+id: a1b2c3d4-e5f6-4789-9a0b-1c2d3e4f5061
+status: test
+description: Detects an exec into a privileged container in a Kubernetes audit
+    log. Exercises quantifier syntax (1 of selection*) and regex matching.
+tags:
+    - attack.execution
+    - attack.t1609
+logsource:
+    product: kubernetes
+    service: audit
+detection:
+    selection_verb:
+        verb: 'create'
+        objectRef.subresource: 'exec'
+    selection_priv_a:
+        requestObject.spec.containers.securityContext.privileged: true
+    selection_priv_b:
+        annotations|re: '.*privileged.*true.*'
+    condition: selection_verb and 1 of selection_priv*
+level: high
+tests:
+    positive:
+        - verb: 'create'
+          'objectRef.subresource': 'exec'
+          'requestObject.spec.containers.securityContext.privileged': true
+        - verb: 'create'
+          'objectRef.subresource': 'exec'
+          annotations: 'pod-security: privileged=true allowed'
+    negative:
+        - verb: 'get'
+          'objectRef.subresource': 'exec'
+          'requestObject.spec.containers.securityContext.privileged': true
+        - verb: 'create'
+          'objectRef.subresource': 'exec'
+          'requestObject.spec.containers.securityContext.privileged': false
+          annotations: 'restricted'

@@ -1,0 +1,4 @@
+{"Image": "C:\\Windows\\System32\\sc.exe", "CommandLine": "sc.exe create EvilSvc binPath= C:\\Users\\Public\\bk.exe start= auto"}
+{"Image": "C:\\Windows\\System32\\sc.exe", "CommandLine": "sc.exe query EvilSvc"}
+{"Image": "C:\\Windows\\System32\\sc.exe", "CommandLine": "sc create Updater binPath= C:\\Temp\\drop.exe"}
+{"Image": "C:\\Windows\\System32\\net.exe", "CommandLine": "net start spooler"}

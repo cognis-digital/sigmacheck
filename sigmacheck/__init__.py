@@ -1,11 +1,57 @@
-"""sigmacheck — part of the Cognis Neural Suite."""
-try:  # re-export the tool's public API + identity from core
-    from sigmacheck.core import *  # noqa: F401,F403
-except Exception:  # pragma: no cover
-    pass
-try:
-    from sigmacheck.core import TOOL_NAME, TOOL_VERSION
-except Exception:  # pragma: no cover
-    TOOL_NAME = "sigmacheck"
-    TOOL_VERSION = "0.1.0"
-__version__ = TOOL_VERSION
+"""SIGMACHECK — Sigma rule validator + unit-test runner (pySigma-spirit).
+
+Stdlib-only. Parses Sigma detection rules, validates them against the Sigma
+specification, compiles the ``detection`` block into a real boolean matcher,
+and runs each rule's inline positive/negative unit tests against sample
+events — reporting pass/fail just like the SigmaHQ test harness.
+"""
+
+from .core import (
+    TOOL_NAME,
+    TOOL_VERSION,
+    Finding,
+    TestResult,
+    RuleResult,
+    CheckResult,
+    SEVERITY_ORDER,
+    VALID_LEVELS,
+    VALID_STATUS,
+    SUPPORTED_MODIFIERS,
+    parse_yaml,
+    validate_rule,
+    match_event,
+    run_rule_tests,
+    eval_condition,
+    tokenize_condition,
+    check_rule,
+    check_text,
+    check_rules,
+    check_bundled,
+    load_bundled_rules,
+    BUNDLED_RULES,
+)
+
+__all__ = [
+    "TOOL_NAME",
+    "TOOL_VERSION",
+    "Finding",
+    "TestResult",
+    "RuleResult",
+    "CheckResult",
+    "SEVERITY_ORDER",
+    "VALID_LEVELS",
+    "VALID_STATUS",
+    "SUPPORTED_MODIFIERS",
+    "parse_yaml",
+    "validate_rule",
+    "match_event",
+    "run_rule_tests",
+    "eval_condition",
+    "tokenize_condition",
+    "check_rule",
+    "check_text",
+    "check_rules",
+    "check_bundled",
+    "load_bundled_rules",
+    "BUNDLED_RULES",
+]

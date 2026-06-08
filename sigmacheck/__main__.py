@@ -1,3 +1,5 @@
+"""Enable ``python -m sigmacheck``."""
+
 import sys
 
 from .cli import main
