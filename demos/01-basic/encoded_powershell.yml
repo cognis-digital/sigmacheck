@@ -1,0 +1,26 @@
+title: Suspicious PowerShell Encoded Command
+id: 6e2a4b1c-9f3d-4a77-8c21-0b9d1e2f3a44
+status: test
+description: >
+  Detects PowerShell launched with an encoded command argument, a common
+  obfuscation technique used to hide malicious payloads.
+level: high
+logsource:
+  category: process_creation
+  product: windows
+detection:
+  selection_img:
+    Image|endswith: \powershell.exe
+  selection_enc:
+    CommandLine|contains:
+      - ' -enc '
+      - ' -encodedcommand '
+      - ' -ec '
+  condition: selection_img and selection_enc
+falsepositives:
+  - Administrative scripts that legitimately use encoded commands
+tags:
+  - attack.execution
+  - attack.t1059.001
+  - attack.defense_evasion
+  - attack.t1027

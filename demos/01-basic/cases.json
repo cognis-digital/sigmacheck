@@ -1,0 +1,34 @@
+[
+  {
+    "name": "encoded-command-malicious",
+    "expect_match": true,
+    "event": {
+      "Image": "C:\\Windows\\System32\\WindowsPowerShell\\v1.0\\powershell.exe",
+      "CommandLine": "powershell.exe -nop -w hidden -enc SQBFAFgA"
+    }
+  },
+  {
+    "name": "encoded-command-shorthand-ec",
+    "expect_match": true,
+    "event": {
+      "Image": "C:\\Windows\\System32\\WindowsPowerShell\\v1.0\\powershell.exe",
+      "CommandLine": "powershell -ec ZQBjAGgAbwA="
+    }
+  },
+  {
+    "name": "benign-powershell-no-encoding",
+    "expect_match": false,
+    "event": {
+      "Image": "C:\\Windows\\System32\\WindowsPowerShell\\v1.0\\powershell.exe",
+      "CommandLine": "powershell.exe -File C:\\scripts\\backup.ps1"
+    }
+  },
+  {
+    "name": "benign-other-process-with-enc-text",
+    "expect_match": false,
+    "event": {
+      "Image": "C:\\Windows\\System32\\cmd.exe",
+      "CommandLine": "cmd.exe /c echo -enc not-powershell"
+    }
+  }
+]
