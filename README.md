@@ -16,7 +16,7 @@
 </div>
 
 ```bash
-pip install cognis-sigmacheck
+pip install "git+https://github.com/cognis-digital/sigmacheck.git"
 sigmacheck scan .            # → prioritized findings in seconds
 ```
 
@@ -49,7 +49,7 @@ detections that work
 ## Quick start
 
 ```bash
-pip install cognis-sigmacheck
+pip install "git+https://github.com/cognis-digital/sigmacheck.git"
 sigmacheck --version
 sigmacheck scan .                       # scan current project
 sigmacheck scan . --format json         # machine-readable
