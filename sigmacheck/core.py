@@ -30,10 +30,9 @@ from __future__ import annotations
 import base64 as _b64
 import fnmatch
 import ipaddress
-import json
 import re
 from dataclasses import dataclass, field
-from typing import Any, Dict, List, Optional, Tuple, Union
+from typing import Any, Dict, List, Optional, Tuple
 
 TOOL_NAME = "sigmacheck"
 TOOL_VERSION = "1.0.0"

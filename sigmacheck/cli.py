@@ -13,7 +13,6 @@ from . import TOOL_NAME, TOOL_VERSION
 from .core import (
     SEVERITY_ORDER,
     CheckResult,
-    RuleResult,
     check_text,
     check_bundled,
     load_bundled_rules,

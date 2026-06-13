@@ -13,9 +13,9 @@ from sigmacheck import (  # noqa: E402
     TOOL_NAME,
     TOOL_VERSION,
     parse_yaml,
-    lint_rule,
-    evaluate_detection,
-    run_unit_tests,
+    validate_rule,
+    match_event,
+    run_rule_tests,
 )
 from sigmacheck.cli import main  # noqa: E402
 
@@ -58,17 +58,19 @@ class TestParser(unittest.TestCase):
 
 class TestLint(unittest.TestCase):
     def test_clean_rule_has_no_errors(self):
-        report = lint_rule(parse_yaml(GOOD_RULE))
-        self.assertEqual(report.errors, [])
+        findings = validate_rule(parse_yaml(GOOD_RULE))
+        # Only low-severity findings allowed (e.g. missing description, no tests)
+        high_errors = [f for f in findings if f.severity in ("high", "critical")]
+        self.assertEqual(high_errors, [])
 
     def test_unknown_selection_is_error(self):
-        report = lint_rule(parse_yaml(BAD_RULE))
-        codes = {f.code for f in report.errors}
-        self.assertIn("SIG008", codes)
+        findings = validate_rule(parse_yaml(BAD_RULE))
+        codes = {f.check for f in findings}
+        self.assertIn("unknown-selection", codes)
 
     def test_missing_mandatory_fields(self):
-        report = lint_rule(parse_yaml("title: x\n"))
-        self.assertTrue(any(f.code == "SIG002" for f in report.errors))
+        findings = validate_rule(parse_yaml("title: x\n"))
+        self.assertTrue(any(f.check == "missing-detection" for f in findings))
 
 
 class TestDetection(unittest.TestCase):
@@ -80,18 +82,18 @@ class TestDetection(unittest.TestCase):
             "Image": "C:\\...\\powershell.exe",
             "CommandLine": "powershell.exe -nop -enc ABC",
         }
-        self.assertTrue(evaluate_detection(self.rule, event))
+        self.assertTrue(match_event(self.rule, event))
 
     def test_no_match_benign(self):
         event = {
             "Image": "C:\\...\\powershell.exe",
             "CommandLine": "powershell.exe -File backup.ps1",
         }
-        self.assertFalse(evaluate_detection(self.rule, event))
+        self.assertFalse(match_event(self.rule, event))
 
     def test_no_match_wrong_process(self):
         event = {"Image": "C:\\windows\\cmd.exe", "CommandLine": "cmd -enc x"}
-        self.assertFalse(evaluate_detection(self.rule, event))
+        self.assertFalse(match_event(self.rule, event))
 
     def test_condition_or_and_not(self):
         rule = parse_yaml(
@@ -99,8 +101,8 @@ class TestDetection(unittest.TestCase):
             "detection:\n  a:\n    F: '1'\n  b:\n    G: '2'\n"
             "  condition: a or not b\n"
         )
-        self.assertTrue(evaluate_detection(rule, {"F": "1", "G": "9"}))
-        self.assertFalse(evaluate_detection(rule, {"F": "0", "G": "2"}))
+        self.assertTrue(match_event(rule, {"F": "1", "G": "9"}))
+        self.assertFalse(match_event(rule, {"F": "0", "G": "2"}))
 
     def test_one_of_them(self):
         rule = parse_yaml(
@@ -108,20 +110,23 @@ class TestDetection(unittest.TestCase):
             "detection:\n  sel_a:\n    F: '1'\n  sel_b:\n    G: '2'\n"
             "  condition: 1 of sel_*\n"
         )
-        self.assertTrue(evaluate_detection(rule, {"F": "1"}))
-        self.assertFalse(evaluate_detection(rule, {"F": "x", "G": "y"}))
+        self.assertTrue(match_event(rule, {"F": "1"}))
+        self.assertFalse(match_event(rule, {"F": "x", "G": "y"}))
 
 
 class TestUnitRunner(unittest.TestCase):
     def test_run_cases(self):
-        rule = parse_yaml(GOOD_RULE)
-        cases = [
-            {"name": "hit", "expect_match": True,
-             "event": {"Image": "a\\powershell.exe", "CommandLine": "x -enc y"}},
-            {"name": "miss", "expect_match": False,
-             "event": {"Image": "a\\powershell.exe", "CommandLine": "clean"}},
-        ]
-        results = run_unit_tests(rule, cases)
+        # Build a rule with embedded tests in the standard Sigma format
+        rule = parse_yaml(GOOD_RULE + """
+tests:
+  positive:
+    - Image: 'a\\powershell.exe'
+      CommandLine: 'x -enc y'
+  negative:
+    - Image: 'a\\powershell.exe'
+      CommandLine: 'clean'
+""")
+        results = run_rule_tests(rule)
         self.assertTrue(all(r.passed for r in results))
 
 
@@ -142,46 +147,21 @@ class TestCli(unittest.TestCase):
         self.assertIn(TOOL_VERSION, buf.getvalue())
         self.assertIn(TOOL_NAME, buf.getvalue())
 
-    def test_lint_clean_exit_zero(self):
+    def test_check_clean_exit_zero(self):
         path = self._write(".yml", GOOD_RULE)
         buf = io.StringIO()
         with redirect_stdout(buf):
-            rc = main(["--format", "json", "lint", path])
+            rc = main(["--format", "json", "check", path])
         self.assertEqual(rc, 0)
         data = json.loads(buf.getvalue())
-        self.assertEqual(data["reports"][0]["errors"], 0)
+        # CheckResult JSON: invalid_rules == 0 means no high-severity failures
+        self.assertEqual(data["invalid_rules"], 0)
 
-    def test_lint_bad_exit_one(self):
+    def test_check_bad_exit_one(self):
         path = self._write(".yml", BAD_RULE)
         buf = io.StringIO()
         with redirect_stdout(buf):
-            rc = main(["lint", path])
-        self.assertEqual(rc, 1)
-
-    def test_test_subcommand_pass(self):
-        rule_path = self._write(".yml", GOOD_RULE)
-        cases = [
-            {"name": "hit", "expect_match": True,
-             "event": {"Image": "a\\powershell.exe", "CommandLine": "x -enc y"}},
-        ]
-        cases_path = self._write(".json", json.dumps(cases))
-        buf = io.StringIO()
-        with redirect_stdout(buf):
-            rc = main(["--format", "json", "test", rule_path, "--cases", cases_path])
-        self.assertEqual(rc, 0)
-        data = json.loads(buf.getvalue())
-        self.assertEqual(data["passed"], data["total"])
-
-    def test_test_subcommand_fail_exit_one(self):
-        rule_path = self._write(".yml", GOOD_RULE)
-        cases = [
-            {"name": "should-miss-but-expected-hit", "expect_match": True,
-             "event": {"Image": "a\\notepad.exe", "CommandLine": "clean"}},
-        ]
-        cases_path = self._write(".json", json.dumps(cases))
-        buf = io.StringIO()
-        with redirect_stdout(buf):
-            rc = main(["test", rule_path, "--cases", cases_path])
+            rc = main(["check", path])
         self.assertEqual(rc, 1)
 
     def test_match_subcommand(self):
@@ -192,9 +172,21 @@ class TestCli(unittest.TestCase):
         )
         buf = io.StringIO()
         with redirect_stdout(buf):
-            rc = main(["--format", "json", "match", rule_path, "--event", event_path])
+            rc = main(["--format", "json", "match", rule_path, event_path])
         self.assertEqual(rc, 1)  # match => detection hit => non-zero
-        self.assertTrue(json.loads(buf.getvalue())["matched"])
+        self.assertTrue(json.loads(buf.getvalue())["any_match"])
+
+    def test_match_no_hit_exit_zero(self):
+        rule_path = self._write(".yml", GOOD_RULE)
+        event_path = self._write(
+            ".json",
+            json.dumps({"Image": "a\\notepad.exe", "CommandLine": "clean"}),
+        )
+        buf = io.StringIO()
+        with redirect_stdout(buf):
+            rc = main(["--format", "json", "match", rule_path, event_path])
+        self.assertEqual(rc, 0)
+        self.assertFalse(json.loads(buf.getvalue())["any_match"])
 
 
 if __name__ == "__main__":

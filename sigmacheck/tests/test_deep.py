@@ -23,7 +23,6 @@ from sigmacheck import (  # noqa: E402
     eval_condition,
     check_text,
     check_bundled,
-    load_bundled_rules,
     SUPPORTED_MODIFIERS,
 )
 from sigmacheck.cli import main  # noqa: E402
