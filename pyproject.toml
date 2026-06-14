@@ -34,3 +34,6 @@ sigmacheck = "sigmacheck.cli:main"
 
 [tool.hatch.build.targets.wheel]
 packages = ["sigmacheck"]
+
+[tool.hatch.metadata]
+allow-direct-references = true
