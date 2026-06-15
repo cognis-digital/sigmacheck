@@ -28,7 +28,12 @@ def _read(path: str) -> str:
 
 
 def _gather(paths: List[str]) -> str:
-    """Concatenate rule files (multi-doc) into a single ``---``-joined text."""
+    """Concatenate rule files (multi-doc) into a single ``---``-joined text.
+
+    Raises ``FileNotFoundError`` for a literal (non-glob) path that does not
+    exist, so the caller can surface a clear error rather than silently
+    producing an empty result.
+    """
     docs: List[str] = []
     expanded: List[str] = []
     for p in paths:
@@ -41,6 +46,9 @@ def _gather(paths: List[str]) -> str:
         elif any(ch in p for ch in "*?[]"):
             expanded.extend(sorted(glob.glob(p, recursive=True)))
         else:
+            if not os.path.exists(p):
+                raise FileNotFoundError(
+                    f"rule file not found: {p!r}")
             expanded.append(p)
     for p in expanded:
         docs.append(_read(p))
@@ -107,7 +115,7 @@ def build_parser() -> argparse.ArgumentParser:
 
     sub.add_parser("demo", help="validate + self-test the bundled rule library")
 
-    ls = sub.add_parser("list", help="list bundled detection rules")
+    sub.add_parser("list", help="list bundled detection rules")
 
     m = sub.add_parser("match", help="match a rule file against JSON event(s)")
     m.add_argument("rule", help="path to a single Sigma rule file")
@@ -131,6 +139,11 @@ def _run_check(result: CheckResult, fmt: str, fail_on: str) -> int:
 
 
 def _load_events(text: str) -> List[dict]:
+    """Parse a JSON array, a single JSON object, or JSONL into a list of dicts.
+
+    Raises ``json.JSONDecodeError`` with a context-enriched message on any
+    malformed line so the caller can report a clean error.
+    """
     text = text.strip()
     if not text:
         return []
@@ -140,14 +153,22 @@ def _load_events(text: str) -> List[dict]:
             return [e for e in obj if isinstance(e, dict)]
         if isinstance(obj, dict):
             return [obj]
+        raise json.JSONDecodeError(
+            "events must be a JSON object or array", text, 0)
     except json.JSONDecodeError:
         pass
+    # JSONL fallback: parse line-by-line with clear per-line errors
     events = []
-    for line in text.splitlines():
+    for lineno, line in enumerate(text.splitlines(), 1):
         line = line.strip()
         if not line:
             continue
-        events.append(json.loads(line))
+        try:
+            obj = json.loads(line)
+        except json.JSONDecodeError as exc:
+            raise json.JSONDecodeError(
+                f"JSONL line {lineno}: {exc.msg}", exc.doc, exc.pos) from exc
+        events.append(obj)
     return [e for e in events if isinstance(e, dict)]
 
 
@@ -160,6 +181,10 @@ def main(argv: Optional[list] = None) -> int:
             text = _gather(args.paths or ["-"])
         except OSError as exc:
             print(f"sigmacheck: error: {exc}", file=sys.stderr)
+            return 2
+        if not text.strip():
+            print("sigmacheck: error: no rule documents found in the given paths",
+                  file=sys.stderr)
             return 2
         result = check_text(text)
         return _run_check(result, args.format, args.fail_on)
@@ -188,17 +213,31 @@ def main(argv: Optional[list] = None) -> int:
     if args.command == "match":
         try:
             rule_text = _read(args.rule)
+        except OSError as exc:
+            print(f"sigmacheck: error reading rule: {exc}", file=sys.stderr)
+            return 2
+        try:
             events = _load_events(_read(args.events))
-        except (OSError, json.JSONDecodeError) as exc:
-            print(f"sigmacheck: error: {exc}", file=sys.stderr)
+        except OSError as exc:
+            print(f"sigmacheck: error reading events: {exc}", file=sys.stderr)
+            return 2
+        except json.JSONDecodeError as exc:
+            print(f"sigmacheck: error: malformed events input: {exc}", file=sys.stderr)
             return 2
         from .core import parse_yaml, _split_documents
         docs = _split_documents(rule_text)
         if not docs:
-            print("sigmacheck: error: no rule found", file=sys.stderr)
+            print("sigmacheck: error: no rule found in the given file", file=sys.stderr)
             return 2
         rule = parse_yaml(docs[0])
-        title = (rule or {}).get("title", "<rule>")
+        if not isinstance(rule, dict):
+            print("sigmacheck: error: rule file did not parse to a valid Sigma mapping",
+                  file=sys.stderr)
+            return 2
+        title = rule.get("title", "<rule>")
+        if not events:
+            print("sigmacheck: warning: events input is empty — no events to match",
+                  file=sys.stderr)
         results = []
         any_match = False
         for i, ev in enumerate(events):

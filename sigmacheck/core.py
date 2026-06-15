@@ -917,8 +917,20 @@ def check_rules(rules: List[Dict[str, Any]]) -> CheckResult:
 
 
 def load_bundled_rules() -> List[Dict[str, Any]]:
-    """Return the bundled detection-rule library as parsed dicts."""
-    return [parse_yaml(doc) for doc in _split_documents(BUNDLED_RULES)]
+    """Return the bundled detection-rule library as parsed dicts.
+
+    Non-mapping documents (parse errors, blank docs) are silently dropped so
+    callers always receive a list of plain dicts.
+    """
+    rules = []
+    for doc in _split_documents(BUNDLED_RULES):
+        try:
+            parsed = parse_yaml(doc)
+        except YamlError:
+            continue
+        if isinstance(parsed, dict):
+            rules.append(parsed)
+    return rules
 
 
 def check_bundled() -> CheckResult:
